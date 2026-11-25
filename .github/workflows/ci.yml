@@ -1,0 +1,127 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # 1) ESLint
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  # 2) Dockerfile Lint (Hadolint)
+  dockerfile-lint:
+    name: Dockerfile Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+  # 3) Unit tests (Jest) + Coverage
+  unit-tests:
+    name: Unit Tests and Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        env:
+          NODE_ENV: test
+        run: npm test
+
+      - name: Run coverage
+        env:
+          NODE_ENV: test
+        run: npm run coverage
+
+  # 4) Integration tests (Hurl + Docker Compose)
+  integration-tests:
+    name: Integration Tests (Hurl + Docker Compose)
+    needs: [lint, dockerfile-lint, unit-tests]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install Hurl CLI
+        run: |
+          HURL_VERSION=7.1.0
+          curl -LO https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl_${HURL_VERSION}_amd64.deb
+          sudo dpkg -i hurl_${HURL_VERSION}_amd64.deb
+          hurl --version
+
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create .htpasswd for Basic Auth
+        run: |
+          mkdir -p tests
+          docker run --rm httpd:2.4-alpine \
+            sh -c "htpasswd -nbB user1 password" > tests/.htpasswd
+          docker run --rm httpd:2.4-alpine \
+            sh -c "htpasswd -nbB testuser 1234" >> tests/.htpasswd
+
+      - name: Run integration tests (docker-compose + LocalStack + DynamoDB Local + Hurl)
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_SESSION_TOKEN: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: npm run test:integration

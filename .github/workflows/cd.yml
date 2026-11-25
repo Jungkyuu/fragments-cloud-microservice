@@ -1,0 +1,107 @@
+name: cd
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ECR_REPOSITORY: fragments
+  AWS_REGION: us-east-1
+  ECS_CLUSTER: fragments-cluster
+  ECS_SERVICE: fragments-service
+  ECS_TASK_FAMILY: fragments-task
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repo exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-scanning-configuration scanOnPush=true \
+            --region $AWS_REGION
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push image to ECR
+        uses: docker/build-push-action@v6
+        env:
+          IMAGE_TAG: ${{ github.ref_name }}
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Update ECS service
+        run: |
+          set -e
+
+          TASK_DEF=$(aws ecs describe-task-definition --task-definition fragments-task)
+          NEW_IMAGE="${{ steps.ecr.outputs.registry }}/fragments:${{ github.ref_name }}"
+
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "$NEW_IMAGE" '
+            .taskDefinition
+            | {
+                family: .family,
+                taskRoleArn: .taskRoleArn,
+                executionRoleArn: .executionRoleArn,
+                networkMode: .networkMode,
+                containerDefinitions: (.containerDefinitions | map(.image = $IMAGE)),
+                requiresCompatibilities: .requiresCompatibilities,
+                cpu: .cpu,
+                memory: .memory
+              }
+          ')
+
+          NEW_REVISION_ARN=$(aws ecs register-task-definition \
+            --family "$(echo "$NEW_TASK_DEF" | jq -r ".family")" \
+            --task-role-arn "$(echo "$NEW_TASK_DEF" | jq -r ".taskRoleArn")" \
+            --execution-role-arn "$(echo "$NEW_TASK_DEF" | jq -r ".executionRoleArn")" \
+            --network-mode "$(echo "$NEW_TASK_DEF" | jq -r ".networkMode")" \
+            --container-definitions "$(echo "$NEW_TASK_DEF" | jq -c ".containerDefinitions")" \
+            --requires-compatibilities "$(echo "$NEW_TASK_DEF" | jq -r ".requiresCompatibilities[]")" \
+            --cpu "$(echo "$NEW_TASK_DEF" | jq -r ".cpu")" \
+            --memory "$(echo "$NEW_TASK_DEF" | jq -r ".memory")" \
+            | jq -r ".taskDefinition.taskDefinitionArn")
+
+          aws ecs update-service \
+            --cluster fragments-cluster \
+            --service fragments-service \
+            --task-definition "$NEW_REVISION_ARN"
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
