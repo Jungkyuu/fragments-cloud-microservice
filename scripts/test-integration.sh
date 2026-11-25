@@ -16,7 +16,7 @@ AWS_DYNAMODB_ENDPOINT=${AWS_DYNAMODB_ENDPOINT:-http://localhost:8000} \
 # 3. Run Hurl tests against dockerized fragments service on localhost:8080
 echo "-> Running Hurl integration tests..."
 hurl --test --jobs 1 \
-  --user user1:password \
+  --user testuser:1234 \
   --variable base_url=http://localhost:8080 \
   tests/integration/fragments.hurl
 
