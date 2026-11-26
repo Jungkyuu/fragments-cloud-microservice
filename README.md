@@ -6,7 +6,7 @@ RESTful API service built with Node.js, Express, Docker, and AWS (S3 & DynamoDB)
 
 ## Overview
 
-The service decouples fragment metadata from raw payload storage:
+The service decouples fragment metadata from raw payload storage for independent scalability and access control:
 - **DynamoDB** stores item metadata (fragment ID, owner ID, MIME type, byte size, creation/update timestamps).
 - **S3** stores the raw binary or text data.
 - **In-memory storage** is available via `DATA_LAYER=memory` for local development and fast unit testing without AWS dependencies.
@@ -21,7 +21,6 @@ flowchart TB
 
     subgraph Docker["Docker Compose - Local Environment"]
         API["Fragments API<br/>Node.js 22 + Express"]
-
         S3["LocalStack<br/>Amazon S3"]
         DB["DynamoDB Local"]
 
@@ -47,6 +46,7 @@ flowchart TB
     end
 
     Integration -.->|"API Testing"| API
+```
     
 ## Tech Stack
 
