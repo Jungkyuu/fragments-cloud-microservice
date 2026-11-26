@@ -13,6 +13,41 @@ The service decouples fragment metadata from raw payload storage:
 
 On-the-fly format conversion is handled through URL extensions (e.g., requesting `GET /v1/fragments/:id.html` converts a stored `text/markdown` fragment into HTML).
 
+## Architecture
+
+```mermaid
+flowchart TB
+    Client["Client / Hurl"]
+
+    subgraph Docker["Docker Compose - Local Environment"]
+        API["Fragments API<br/>Node.js 22 + Express"]
+
+        S3["LocalStack<br/>Amazon S3"]
+        DB["DynamoDB Local"]
+
+        API -->|"Fragment data"| S3
+        API -->|"Fragment metadata"| DB
+    end
+
+    Client -->|"HTTP REST Requests"| API
+
+    subgraph CI["CI/CD - GitHub Actions"]
+        Trigger["Push / Pull Request"]
+        Workflow["GitHub Actions"]
+        Lint["ESLint"]
+        Tests["Unit Tests"]
+        Build["Docker Build"]
+        Integration["Hurl Integration Tests"]
+
+        Trigger --> Workflow
+        Workflow --> Lint
+        Workflow --> Tests
+        Workflow --> Build
+        Workflow --> Integration
+    end
+
+    Integration -.->|"API Testing"| API
+    
 ## Tech Stack
 
 - **Runtime & Framework:** Node.js 22, Express
